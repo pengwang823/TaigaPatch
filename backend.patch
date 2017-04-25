@@ -1,0 +1,193 @@
+From 8c230e1e18d2ba512def8b838ffeb1bf1008340c Mon Sep 17 00:00:00 2001
+From: pengwang <pengwang823@gmail.com>
+Date: Tue, 25 Apr 2017 03:48:10 -0700
+Subject: [PATCH] Check in task points back end feature
+
+Signed-off-by: pengwang <pengwang823@gmail.com>
+---
+ taiga/projects/milestones/api.py                |  5 +++--
+ taiga/projects/tasks/api.py                     | 21 ++++++++++++++++++---
+ taiga/projects/tasks/migrations/0001_initial.py |  1 +
+ taiga/projects/tasks/models.py                  |  5 ++++-
+ taiga/projects/tasks/serializers.py             |  1 +
+ taiga/projects/tasks/services.py                |  1 +
+ taiga/projects/tasks/validators.py              |  8 ++------
+ 7 files changed, 30 insertions(+), 12 deletions(-)
+
+diff --git a/taiga/projects/milestones/api.py b/taiga/projects/milestones/api.py
+index 4fa233c0..de720a20 100644
+--- a/taiga/projects/milestones/api.py
++++ b/taiga/projects/milestones/api.py
+@@ -103,14 +103,15 @@ class MilestoneViewSet(HistoryResourceMixin, WatchedResourceMixin,
+         milestone = get_object_or_404(models.Milestone, pk=pk)
+ 
+         self.check_permissions(request, "stats", milestone)
+-
++        closed_points = [task.points for task in milestone.tasks.filter(status__is_closed=True)]
+         total_points = milestone.total_points
+         milestone_stats = {
+             'name': milestone.name,
+             'estimated_start': milestone.estimated_start,
+             'estimated_finish': milestone.estimated_finish,
+             'total_points': total_points,
+-            'completed_points': milestone.closed_points.values(),
++            #'completed_points': milestone.closed_points.values(),
++            'completed_points': closed_points,
+             'total_userstories': milestone.cached_user_stories.count(),
+             'completed_userstories': milestone.cached_user_stories.filter(is_closed=True).count(),
+             'total_tasks': milestone.tasks.count(),
+diff --git a/taiga/projects/tasks/api.py b/taiga/projects/tasks/api.py
+index 60f8b6e4..f35f649a 100644
+--- a/taiga/projects/tasks/api.py
++++ b/taiga/projects/tasks/api.py
+@@ -30,6 +30,8 @@ from taiga.projects.history.mixins import HistoryResourceMixin
+ from taiga.projects.milestones.models import Milestone
+ from taiga.projects.mixins.by_ref import ByRefMixin
+ from taiga.projects.models import Project, TaskStatus
++from taiga.projects.tasks.models import Task
++from taiga.projects.userstories.models import UserStory
+ from taiga.projects.notifications.mixins import WatchedResourceMixin, WatchersViewSetMixin
+ from taiga.projects.occ import OCCResourceMixin
+ from taiga.projects.tagging.api import TaggedResourceMixin
+@@ -126,7 +128,12 @@ class TaskViewSet(OCCResourceMixin, VotedResourceMixin, HistoryResourceMixin, Wa
+         else:
+             self._old_us_order_key = self._us_order_key(self.get_object())
+             self._old_taskboard_order_key = self._taskboard_order_key(self.get_object())
+-
++        usPoints = UserStory.objects.get(pk=obj.user_story.id).get_total_points();
++        tasks = Task.objects.filter(user_story=obj.user_story.id)
++        taskPoints = sum(item.points for item in tasks if item.id != obj.id)
++        if (taskPoints + float(obj.points) > usPoints):
++              errorMsg = "You points you input should be no bigger than project points, the input range is from 0 to %f"%(usPoints - taskPoints)
++              raise exc.WrongArguments(_(errorMsg))
+         super().pre_save(obj)
+ 
+     def _reorder_if_needed(self, obj, old_order_key, order_key, order_attr,
+@@ -167,13 +174,11 @@ class TaskViewSet(OCCResourceMixin, VotedResourceMixin, HistoryResourceMixin, Wa
+                                               milestone=obj.milestone)
+             orders_updated.update(updated)
+             self.headers["Taiga-Info-Order-Updated"] = json.dumps(orders_updated)
+-
+         super().post_save(obj, created)
+ 
+     def update(self, request, *args, **kwargs):
+         self.object = self.get_object_or_none()
+         project_id = request.DATA.get('project', None)
+-
+         if project_id and self.object and self.object.project.id != project_id:
+             try:
+                 new_project = Project.objects.get(pk=project_id)
+@@ -200,6 +205,16 @@ class TaskViewSet(OCCResourceMixin, VotedResourceMixin, HistoryResourceMixin, Wa
+             except Project.DoesNotExist:
+                 return response.BadRequest(_("The project doesn't exist"))
+ 
++        points = request.DATA.get('points', None)
++        if points is not None:
++          usId = Task.objects.get(pk=self.object.id).user_story.id;
++          tasks = Task.objects.filter(user_story=usId)
++          taskPoints = sum(item.points for item in tasks if item.id != self.object.id)
++          usPoints = UserStory.objects.get(pk=usId).get_total_points();
++          if (taskPoints + float(points) > usPoints):
++              errorMsg = "You points you input should be no bigger than project points, the input range is from 0 to %f"%(usPoints - taskPoints)
++              raise exc.WrongArguments(_(errorMsg))
++
+         return super().update(request, *args, **kwargs)
+ 
+     @list_route(methods=["GET"])
+diff --git a/taiga/projects/tasks/migrations/0001_initial.py b/taiga/projects/tasks/migrations/0001_initial.py
+index b07ae15f..2ff3bec6 100644
+--- a/taiga/projects/tasks/migrations/0001_initial.py
++++ b/taiga/projects/tasks/migrations/0001_initial.py
+@@ -34,6 +34,7 @@ class Migration(migrations.Migration):
+                 ('is_iocaine', models.BooleanField(verbose_name='is iocaine', default=False)),
+                 ('assigned_to', models.ForeignKey(null=True, verbose_name='assigned to', default=None, blank=True, to=settings.AUTH_USER_MODEL, related_name='tasks_assigned_to_me')),
+                 ('milestone', models.ForeignKey(null=True, verbose_name='milestone', default=None, blank=True, to='milestones.Milestone', related_name='tasks')),
++                ('points', models.FloatField(default=None, null=True, blank=True, verbose_name='points')),
+                 ('owner', models.ForeignKey(null=True, verbose_name='owner', default=None, blank=True, to=settings.AUTH_USER_MODEL, related_name='owned_tasks')),
+                 ('project', models.ForeignKey(verbose_name='project', to='projects.Project', related_name='tasks')),
+                 ('status', models.ForeignKey(verbose_name='status', to='projects.TaskStatus', related_name='tasks')),
+diff --git a/taiga/projects/tasks/models.py b/taiga/projects/tasks/models.py
+index 5b7b0045..ce654b44 100644
+--- a/taiga/projects/tasks/models.py
++++ b/taiga/projects/tasks/models.py
+@@ -17,6 +17,8 @@
+ # along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ 
+ from django.db import models
++from taiga.base.api import validators
++from taiga.base.exceptions import ValidationError
+ from django.contrib.contenttypes.fields import GenericRelation
+ from django.contrib.postgres.fields import ArrayField
+ from django.conf import settings
+@@ -29,7 +31,6 @@ from taiga.projects.notifications.mixins import WatchedModelMixin
+ from taiga.projects.mixins.blocked import BlockedMixin
+ from taiga.projects.tagging.models import TaggedMixin
+ 
+-
+ class Task(OCCModelMixin, WatchedModelMixin, BlockedMixin, TaggedMixin, models.Model):
+     user_story = models.ForeignKey("userstories.UserStory", null=True, blank=True,
+                                    related_name="tasks", verbose_name=_("user story"))
+@@ -44,6 +45,8 @@ class Task(OCCModelMixin, WatchedModelMixin, BlockedMixin, TaggedMixin, models.M
+     milestone = models.ForeignKey("milestones.Milestone", null=True, blank=True, on_delete=models.SET_NULL,
+                                   default=None, related_name="tasks",
+                                   verbose_name=_("milestone"))
++    points = models.FloatField(default=None, null=True, blank=True,
++                               verbose_name=_("points"))
+     created_date = models.DateTimeField(null=False, blank=False,
+                                         verbose_name=_("created date"),
+                                         default=timezone.now)
+diff --git a/taiga/projects/tasks/serializers.py b/taiga/projects/tasks/serializers.py
+index 04cab33e..87391356 100644
+--- a/taiga/projects/tasks/serializers.py
++++ b/taiga/projects/tasks/serializers.py
+@@ -43,6 +43,7 @@ class TaskListSerializer(VoteResourceSerializerMixin, WatchedResourceSerializer,
+     ref = Field()
+     project = Field(attr="project_id")
+     milestone = Field(attr="milestone_id")
++    points = Field()
+     milestone_slug = MethodField()
+     created_date = Field()
+     modified_date = Field()
+diff --git a/taiga/projects/tasks/services.py b/taiga/projects/tasks/services.py
+index 52f1bb55..3ec0228d 100644
+--- a/taiga/projects/tasks/services.py
++++ b/taiga/projects/tasks/services.py
+@@ -156,6 +156,7 @@ def tasks_to_csv(project, queryset):
+             "assigned_to_full_name": task.assigned_to.get_full_name() if task.assigned_to else None,
+             "status": task.status.name if task.status else None,
+             "is_iocaine": task.is_iocaine,
++            "points": task.points,
+             "is_closed": task.status is not None and task.status.is_closed,
+             "us_order": task.us_order,
+             "taskboard_order": task.taskboard_order,
+diff --git a/taiga/projects/tasks/validators.py b/taiga/projects/tasks/validators.py
+index 7f38f80b..5846ad45 100644
+--- a/taiga/projects/tasks/validators.py
++++ b/taiga/projects/tasks/validators.py
+@@ -35,15 +35,11 @@ from . import models
+ 
+ 
+ class TaskValidator(AssignedToValidator, WatchersValidator, EditableWatchedResourceSerializer,
+-                    validators.ModelValidator):
+-    tags = TagsAndTagsColorsField(default=[], required=False)
+-    external_reference = PgArrayField(required=False)
+-
++                    validators.ModelValidator, ProjectExistsValidator, validators.Validator):
+     class Meta:
+         model = models.Task
+         read_only_fields = ('id', 'ref', 'created_date', 'modified_date', 'owner')
+ 
+-
+ class TasksBulkValidator(ProjectExistsValidator, validators.Validator):
+     project_id = serializers.IntegerField()
+     milestone_id = serializers.IntegerField()
+@@ -152,4 +148,4 @@ class UpdateTasksOrderBulkValidator(ProjectExistsValidator, validators.Validator
+             raise ValidationError(_("Invalid task ids. All tasks must belong to the same project and, "
+                                     "if it exists, to the same status, user story and/or milestone."))
+ 
+-        return attrs
++        return attrs
+\ No newline at end of file
+-- 
+2.11.0
+

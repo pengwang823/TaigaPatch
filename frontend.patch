@@ -1,0 +1,216 @@
+From cfe8895d5ce15b9f0de0c6d4218c22cc22b17fee Mon Sep 17 00:00:00 2001
+From: pengwang <pengwang823@gmail.com>
+Date: Tue, 25 Apr 2017 03:46:51 -0700
+Subject: [PATCH] Add task points feature
+
+Signed-off-by: pengwang <pengwang823@gmail.com>
+---
+ app/coffee/modules/related-tasks.coffee            | 18 ++++++++++------
+ app/coffee/modules/taskboard/lightboxes.coffee     |  8 +++++++-
+ app/modules/components/card/card.jade              |  3 +++
+ .../modules/lightbox-task-create-edit.jade         | 10 ++++++++-
+ app/partials/task/related-task-create-form.jade    |  2 ++
+ app/partials/task/related-task-row-edit.jade       |  5 +++++
+ app/styles/modules/common/related-tasks.scss       | 24 +++++++++++++++++++++-
+ 7 files changed, 61 insertions(+), 9 deletions(-)
+
+diff --git a/app/coffee/modules/related-tasks.coffee b/app/coffee/modules/related-tasks.coffee
+index 6faeb43a..ba7d8af8 100644
+--- a/app/coffee/modules/related-tasks.coffee
++++ b/app/coffee/modules/related-tasks.coffee
+@@ -37,7 +37,8 @@ RelatedTaskRowDirective = ($repo, $compile, $confirm, $rootscope, $loading, $tem
+         @childScope = $scope.$new()
+ 
+         saveTask = debounce 2000, (task) ->
+-            task.subject = $el.find('input').val()
++            task.subject = $el.find('.task-name input').val()
++            task.points = $el.find('.task-points input').val()
+ 
+             currentLoading = $loading()
+                 .target($el.find('.task-name'))
+@@ -50,7 +51,8 @@ RelatedTaskRowDirective = ($repo, $compile, $confirm, $rootscope, $loading, $tem
+ 
+             promise.then null, =>
+                 currentLoading.finish()
+-                $el.find('input').val(task.subject)
++                $el.find('.task-name').val(task.subject)
++                $el.find('.task-points').val(task.points)
+                 $confirm.notify("error")
+             return promise
+ 
+@@ -61,6 +63,7 @@ RelatedTaskRowDirective = ($repo, $compile, $confirm, $rootscope, $loading, $tem
+             $el.html($compile(templateEdit({task: task}))(childScope))
+ 
+             $el.find(".task-name input").val(task.subject)
++            $el.find(".task-points input").val(task.points)
+ 
+             $el.on "keyup", "input", (event) ->
+                 if event.keyCode == 13
+@@ -130,7 +133,8 @@ RelatedTaskCreateFormDirective = ($repo, $compile, $confirm, $tgmodel, $loading,
+ 
+     link = ($scope, $el, $attrs) ->
+         createTask = (task) ->
+-            task.subject = $el.find('input').val()
++            task.subject = $el.find('.task-name input').val()
++            task.points = $el.find('.task-points input').val()
+             task.assigned_to = $scope.newTask.assigned_to
+             task.status = $scope.newTask.status
+             $scope.newTask.status = $scope.project.default_task_status
+@@ -146,10 +150,11 @@ RelatedTaskCreateFormDirective = ($repo, $compile, $confirm, $tgmodel, $loading,
+                 currentLoading.finish()
+                 $scope.$emit("related-tasks:add")
+ 
+-            promise.then null, ->
+-                $el.find('input').val(task.subject)
++            promise.then null, (response) ->
++                $el.find('.task-name input').val(task.subject)
++                $el.find('.task-points input').val(task.points)
+                 currentLoading.finish()
+-                $confirm.notify("error")
++                $confirm.notify("light-error", response._error_message)
+ 
+             return promise
+ 
+@@ -161,6 +166,7 @@ RelatedTaskCreateFormDirective = ($repo, $compile, $confirm, $tgmodel, $loading,
+         reset = () ->
+             newTask = {
+                 subject: ""
++                points: ""
+                 assigned_to: null
+             }
+ 
+diff --git a/app/coffee/modules/taskboard/lightboxes.coffee b/app/coffee/modules/taskboard/lightboxes.coffee
+index 19ecb708..a5e9f5ea 100644
+--- a/app/coffee/modules/taskboard/lightboxes.coffee
++++ b/app/coffee/modules/taskboard/lightboxes.coffee
+@@ -27,7 +27,7 @@ bindOnce = @.taiga.bindOnce
+ debounce = @.taiga.debounce
+ trim = @.taiga.trim
+ 
+-CreateEditTaskDirective = ($repo, $model, $rs, $rootscope, $loading, lightboxService, $translate, $q, attachmentsService) ->
++CreateEditTaskDirective = ($repo, $model, $rs, $rootscope, $loading, lightboxService, $translate, $q, attachmentsService, $confirm) ->
+     link = ($scope, $el, attrs) ->
+         $scope.isNew = true
+ 
+@@ -185,6 +185,11 @@ CreateEditTaskDirective = ($repo, $model, $rs, $rootscope, $loading, lightboxSer
+                 currentLoading.finish()
+                 lightboxService.close($el)
+ 
++            promise.then null, (response) =>
++                currentLoading.finish()
++                console.log response
++                $confirm.notify('light-error', response._error_message)
++
+         $el.on "submit", "form", submit
+ 
+         $scope.$on "$destroy", ->
+@@ -251,6 +256,7 @@ module.directive("tgLbCreateEditTask", [
+     "$translate",
+     "$q",
+     "tgAttachmentsService",
++    "$tgConfirm",
+     CreateEditTaskDirective
+ ])
+ 
+diff --git a/app/modules/components/card/card.jade b/app/modules/components/card/card.jade
+index 556c3c82..9a6e9b36 100644
+--- a/app/modules/components/card/card.jade
++++ b/app/modules/components/card/card.jade
+@@ -7,6 +7,9 @@
+     div(ng-if="vm.visible('owner')")
+         include card-templates/card-title
+     include card-templates/card-data
++    p.points-value(ng-if= "!vm.item.getIn(['model','tasks'])")
++        span() {{vm.item.getIn(['model','points'])}} 
++        span(translate="TASKBOARD.TABLE.FIELD_POINTS")
+     include card-templates/card-completion
+     include card-templates/card-tasks
+     tg-card-slideshow(
+diff --git a/app/partials/includes/modules/lightbox-task-create-edit.jade b/app/partials/includes/modules/lightbox-task-create-edit.jade
+index 4e61d4f6..3a17907b 100644
+--- a/app/partials/includes/modules/lightbox-task-create-edit.jade
++++ b/app/partials/includes/modules/lightbox-task-create-edit.jade
+@@ -10,7 +10,15 @@ form
+             data-required="true"
+             data-maxlength="500"
+         )
+-
++    fieldset
++        input(
++            type="text"
++            ng-model="task.points"
++            ng-attr-placeholder="5"
++            ng-model-options="{ debounce: 200 }"
++            data-required="true"
++            data-maxlength="3"
++        )
+     fieldset
+         select(
+             ng-model="task.status"
+diff --git a/app/partials/task/related-task-create-form.jade b/app/partials/task/related-task-create-form.jade
+index 69cce1d0..0c8ac673 100644
+--- a/app/partials/task/related-task-create-form.jade
++++ b/app/partials/task/related-task-create-form.jade
+@@ -1,6 +1,8 @@
+ .row.single-related-task.related-task-create-form.active(ng-if="openNewRelatedTask")
+     .task-name
+         input(type='text', tg-autofocus, placeholder="{{'TASK.PLACEHOLDER_SUBJECT' | translate}}")
++    .task-points
++        input(type='text', tg-autofocus, placeholder="5")
+     .task-settings
+         a.save-task(ng-click="save()" title="{{'COMMON.SAVE' | translate}}")
+             tg-svg(svg-icon="icon-save")
+diff --git a/app/partials/task/related-task-row-edit.jade b/app/partials/task/related-task-row-edit.jade
+index 893b7b27..8db93bdc 100644
+--- a/app/partials/task/related-task-row-edit.jade
++++ b/app/partials/task/related-task-row-edit.jade
+@@ -3,6 +3,11 @@
+         type='text'
+         placeholder="{{'TASK.PLACEHOLDER_SUBJECT' | translate}}"
+     )
++.task-points
++    input(
++        type='text'
++        placeholder="5"
++    )
+ .task-settings
+     a.save-task(
+         href=""
+diff --git a/app/styles/modules/common/related-tasks.scss b/app/styles/modules/common/related-tasks.scss
+index a2762c97..1420bed8 100644
+--- a/app/styles/modules/common/related-tasks.scss
++++ b/app/styles/modules/common/related-tasks.scss
+@@ -86,7 +86,29 @@
+             @include font-size(medium);
+             margin-right: 1rem;
+             padding: 3px;
+-            width: 85%;
++            width: 95%;
++        }
++        &.loading {
++            margin: 0;
++            padding: 8px;
++            text-align: center;
++            width: 100%;
++            span {
++                animation: loading .5s linear, spin 1s linear infinite;
++            }
++        }
++    }
++    .task-points {
++        display: flex;
++        margin-right: 1rem;
++        span {
++            margin-right: .25rem;
++        }
++        input {
++            @include font-size(medium);
++            margin-right: 1rem;
++            padding: 3px;
++            width: 50px;
+         }
+         &.loading {
+             margin: 0;
+-- 
+2.11.0
+
